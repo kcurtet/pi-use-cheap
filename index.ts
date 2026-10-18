@@ -18,7 +18,7 @@
  *
  * Inspired by midudev/better-claude (plugins/use-haiku).
  */
-import type { ExtensionAPI, Model } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Model, ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 const MARK = "_";
 const DEFAULT_MODEL = "glm-5.3-flash";
@@ -34,18 +34,15 @@ function modelSpec(pi: ExtensionAPI): string {
 	return DEFAULT_MODEL;
 }
 
-function resolveModel(pi: ExtensionAPI, spec: string): Model<any> | undefined {
-	
+function resolveModel(registry: ModelRegistry, spec: string): Model<any> | undefined {
 	if (spec.includes("/")) {
 		const idx = spec.indexOf("/");
-		const model = pi.session.modelRegistry.find(spec.slice(0, idx), spec.slice(idx + 1));
-		return model;
+		return registry.find(spec.slice(0, idx), spec.slice(idx + 1));
 	}
 	// Plain id: prefer models whose provider has auth configured.
-	const candidates = pi.session.modelRegistry.getAll().filter((m) => m.id === spec);
+	const candidates = registry.getAll().filter((m) => m.id === spec);
 	return (
-		candidates.find((m) => pi.session.modelRegistry.hasConfiguredAuth(m)) ??
-		candidates[0]
+		candidates.find((m) => registry.hasConfiguredAuth(m)) ?? candidates[0]
 	);
 }
 
@@ -70,8 +67,8 @@ export default function useCheapExtension(pi: ExtensionAPI) {
 			return { action: "transform" as const, text };
 		}
 
-		const model = resolveModel(pi, modelSpec(pi));
-		if (!model || !pi.session.modelRegistry.hasConfiguredAuth(model)) {
+		const model = resolveModel(ctx.modelRegistry, modelSpec(pi));
+		if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) {
 			ctx.ui.notify(
 				`use-cheap: model "${modelSpec(pi)}" not available — running on current model`,
 				"warning",
@@ -83,14 +80,14 @@ export default function useCheapExtension(pi: ExtensionAPI) {
 		return { action: "transform" as const, text };
 	});
 
-	pi.on("agent_start", async () => {
+	pi.on("agent_start", async (_event, ctx) => {
 		if (!cheapTurn) return;
-		const model = resolveModel(pi, modelSpec(pi));
+		const model = resolveModel(ctx.modelRegistry, modelSpec(pi));
 		if (!model) {
 			cheapTurn = false;
 			return;
 		}
-		previousModel = pi.session.model;
+		previousModel = ctx.model;
 		const ok = await pi.setModel(model);
 		if (!ok) {
 			cheapTurn = false;
@@ -118,8 +115,8 @@ export default function useCheapExtension(pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const spec = args.trim();
 			if (spec) {
-				const model = resolveModel(pi, spec);
-				if (!model || !pi.session.modelRegistry.hasConfiguredAuth(model)) {
+				const model = resolveModel(ctx.modelRegistry, spec);
+				if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) {
 					ctx.ui.notify(`Model "${spec}" not available`, "error");
 					return;
 				}
