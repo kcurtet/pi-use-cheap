@@ -35,16 +35,16 @@ function modelSpec(pi: ExtensionAPI): string {
 }
 
 function resolveModel(pi: ExtensionAPI, spec: string): Model<any> | undefined {
-	const registry = pi.modelRegistry;
+	
 	if (spec.includes("/")) {
 		const idx = spec.indexOf("/");
-		const model = registry.find(spec.slice(0, idx), spec.slice(idx + 1));
+		const model = pi.session.modelRegistry.find(spec.slice(0, idx), spec.slice(idx + 1));
 		return model;
 	}
 	// Plain id: prefer models whose provider has auth configured.
-	const candidates = registry.getAll().filter((m) => m.id === spec);
+	const candidates = pi.session.modelRegistry.getAll().filter((m) => m.id === spec);
 	return (
-		candidates.find((m) => registry.hasConfiguredAuth(m)) ??
+		candidates.find((m) => pi.session.modelRegistry.hasConfiguredAuth(m)) ??
 		candidates[0]
 	);
 }
@@ -71,7 +71,7 @@ export default function useCheapExtension(pi: ExtensionAPI) {
 		}
 
 		const model = resolveModel(pi, modelSpec(pi));
-		if (!model || !pi.modelRegistry.hasConfiguredAuth(model)) {
+		if (!model || !pi.session.modelRegistry.hasConfiguredAuth(model)) {
 			ctx.ui.notify(
 				`use-cheap: model "${modelSpec(pi)}" not available — running on current model`,
 				"warning",
@@ -119,7 +119,7 @@ export default function useCheapExtension(pi: ExtensionAPI) {
 			const spec = args.trim();
 			if (spec) {
 				const model = resolveModel(pi, spec);
-				if (!model || !pi.modelRegistry.hasConfiguredAuth(model)) {
+				if (!model || !pi.session.modelRegistry.hasConfiguredAuth(model)) {
 					ctx.ui.notify(`Model "${spec}" not available`, "error");
 					return;
 				}
