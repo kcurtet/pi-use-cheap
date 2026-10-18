@@ -1,0 +1,14 @@
+{
+	"name": "pi-use-cheap",
+	"version": "0.1.0",
+	"description": "Prefix a prompt with _ to run that turn on a configurable cheap model in pi",
+	"keywords": ["pi-package"],
+	"license": "MIT",
+	"repository": "github:kcurtet/pi-use-cheap",
+	"pi": {
+		"extensions": ["./index.ts"]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}
