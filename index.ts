@@ -7,31 +7,48 @@
  *
  *   ❯ _summarize the last commit
  *
- * Model resolution (first match wins):
- *   1. `--cheap-model <provider/model-id | model-id>` CLI flag
- *   2. `PI_USE_CHEAP_MODEL` env var (same format)
- *   3. Default: glm-5.3-flash
+ * Configuration, first match wins:
+ *   1. `/use-cheap config <provider/model-id | model-id>` (persisted)
+ *   2. `--cheap-model` CLI flag
+ *   3. `PI_USE_CHEAP_MODEL` env var
+ *   4. Default: glm-5.3-flash
  *
- * A plain model-id is searched across all providers with configured auth.
- * If the model can't be resolved, the prompt runs unmodified on the current
- * model and a notification says so.
+ * `/use-cheap` shows the current config; `/use-cheap reset` clears it.
  *
  * Inspired by midudev/better-claude (plugins/use-haiku).
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { ExtensionAPI, Model, ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 const MARK = "_";
 const DEFAULT_MODEL = "glm-5.3-flash";
 
-let runtimeModelSpec: string | undefined; // set by /cheap during a session
+interface PersistedConfig {
+	model?: string; // "provider/model-id" or "model-id"
+}
 
-function modelSpec(pi: ExtensionAPI): string {
-	if (runtimeModelSpec) return runtimeModelSpec;
-	const flag = pi.getFlag("cheap-model");
-	if (typeof flag === "string" && flag.trim()) return flag.trim();
-	const env = process.env.PI_USE_CHEAP_MODEL;
-	if (env && env.trim()) return env.trim();
-	return DEFAULT_MODEL;
+function configPath(): string {
+	const home = process.env.PI_HOME ?? path.join(os.homedir(), ".pi", "agent");
+	return path.join(home, "extensions-config", "use-cheap.json");
+}
+
+function loadConfig(): PersistedConfig {
+	try {
+		return JSON.parse(fs.readFileSync(configPath(), "utf8")) as PersistedConfig;
+	} catch {
+		return {};
+	}
+}
+
+function saveConfig(config: PersistedConfig): void {
+	try {
+		fs.mkdirSync(path.dirname(configPath()), { recursive: true });
+		fs.writeFileSync(configPath(), JSON.stringify(config, null, "\t") + "\n");
+	} catch {
+		// read-only home: config stays per-session
+	}
 }
 
 function resolveModel(registry: ModelRegistry, spec: string): Model<any> | undefined {
@@ -55,6 +72,16 @@ export default function useCheapExtension(pi: ExtensionAPI) {
 	let cheapTurn = false;
 	let previousModel: Model<any> | undefined;
 
+	function modelSpec(): string {
+		const persisted = loadConfig().model;
+		if (persisted) return persisted;
+		const flag = pi.getFlag("cheap-model");
+		if (typeof flag === "string" && flag.trim()) return flag.trim();
+		const env = process.env.PI_USE_CHEAP_MODEL;
+		if (env && env.trim()) return env.trim();
+		return DEFAULT_MODEL;
+	}
+
 	pi.on("input", async (event, ctx) => {
 		if (!isMarked(event.text)) return;
 
@@ -67,10 +94,10 @@ export default function useCheapExtension(pi: ExtensionAPI) {
 			return { action: "transform" as const, text };
 		}
 
-		const model = resolveModel(ctx.modelRegistry, modelSpec(pi));
+		const model = resolveModel(ctx.modelRegistry, modelSpec());
 		if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) {
 			ctx.ui.notify(
-				`use-cheap: model "${modelSpec(pi)}" not available — running on current model`,
+				`use-cheap: model "${modelSpec()}" not available — running on current model`,
 				"warning",
 			);
 			return { action: "transform" as const, text };
@@ -82,7 +109,7 @@ export default function useCheapExtension(pi: ExtensionAPI) {
 
 	pi.on("agent_start", async (_event, ctx) => {
 		if (!cheapTurn) return;
-		const model = resolveModel(ctx.modelRegistry, modelSpec(pi));
+		const model = resolveModel(ctx.modelRegistry, modelSpec());
 		if (!model) {
 			cheapTurn = false;
 			return;
@@ -99,9 +126,10 @@ export default function useCheapExtension(pi: ExtensionAPI) {
 		if (!cheapTurn) return;
 		cheapTurn = false;
 		if (previousModel !== undefined) {
+			const answered = modelSpec();
 			await pi.setModel(previousModel);
 			previousModel = undefined;
-			ctx.ui.notify(`⚡ Answered by ${modelSpec(pi)}`, "info");
+			if (ctx.hasUI) ctx.ui.notify(`⚡ Answered by ${answered}`, "info");
 		}
 	});
 
@@ -110,21 +138,34 @@ export default function useCheapExtension(pi: ExtensionAPI) {
 		type: "string",
 	});
 
-	pi.registerCommand("cheap", {
-		description: "Show or set the cheap model used for `_` prompts",
+	pi.registerCommand("use-cheap", {
+		description: "Configure `_` prompts: /use-cheap [config <model> | reset]",
 		handler: async (args, ctx) => {
-			const spec = args.trim();
-			if (spec) {
-				const model = resolveModel(ctx.modelRegistry, spec);
+			const parts = args.trim().split(/\s+/).filter(Boolean);
+
+			if (parts.length === 0) {
+				ctx.ui.notify(`_ prompts: ${modelSpec()}`, "info");
+				return;
+			}
+
+			if (parts[0] === "reset") {
+				saveConfig({});
+				ctx.ui.notify(`_ prompts: config cleared (default ${DEFAULT_MODEL})`, "info");
+				return;
+			}
+
+			if (parts[0] === "config" && parts[1]) {
+				const model = resolveModel(ctx.modelRegistry, parts[1]);
 				if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) {
-					ctx.ui.notify(`Model "${spec}" not available`, "error");
+					ctx.ui.notify(`Model "${parts[1]}" not available`, "error");
 					return;
 				}
-				runtimeModelSpec = spec;
-				ctx.ui.notify(`Cheap model set to ${model.provider}/${model.id}`, "info");
-			} else {
-				ctx.ui.notify(`Cheap model: ${modelSpec(pi)} (_ prefix, /cheap <model> to change)`, "info");
+				saveConfig({ model: parts[1] });
+				ctx.ui.notify(`_ prompts: ${model.provider}/${model.id}`, "info");
+				return;
 			}
+
+			ctx.ui.notify("Usage: /use-cheap [config <model> | reset]", "error");
 		},
 	});
 }
